@@ -1,0 +1,21 @@
+[package]
+name = "brainfucker"
+version = "0.1.0"
+authors = ["SuitCase <ubatamamoon@gmail.com>"]
+edition = "2018"
+description = "Brainfuck Interpreter GUI Frontend"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = ["thread-pool"]
+thread-pool = ["futures/thread-pool"]
+
+[package.metadata.bundle]
+name = "BrainFucker"
+icon = ["AppIcon.icns"]
+copyright = "Copyright (c) SuitCase 2019. All rights reserved."
+
+[dependencies]
+iui = { git = "https://github.com/rust-native-ui/libui-rs.git" }
+rusty_brainfuck = { path = "rusty_brainfuck", version = "0.1.0"}
+futures = "0.3.1"
