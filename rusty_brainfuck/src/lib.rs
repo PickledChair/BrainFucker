@@ -1,25 +1,215 @@
+use std::iter::Peekable;
+use std::str::Chars;
+use std::ops::DerefMut;
+
+use Inst::*;
+
 type ProgramString = String;
 type ResultString  = String;
 type InputString   = String;
 
 const MAX_MEMORY: usize = 30_000;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Inst {
+    Add(u8),       // Add a number to the current address
+    Sub(u8),       // Sub a number to the current address
+    Shr(usize),    // Shift the pointer to the right
+    Shl(usize),    // Shift the pointer to the left
+    Jpf(usize),    // Jump forward (to the closing bracket)
+    Jpb(usize),    // Jump back (to the open bracket)
+    Wrt,           // Display the current pointee
+    Red,           // Get a input, and put the input to the current address
+    Stz,           // Store 0 to the current address
+}
+
+struct CodeGen<'a> {
+    chars: Box<Peekable<Chars<'a>>>,
+}
+
+impl<'a> CodeGen<'a> {
+    pub fn new(program: &'a str) -> CodeGen<'a> {
+        CodeGen { chars: Box::new(program.chars().peekable()) }
+    }
+
+    pub fn generate_insts(&mut self) -> Result<Vec<Inst>, &'static str> {
+        let chars = self.chars.deref_mut();
+        let mut result = Vec::new();
+
+        let mut pos: usize = 0;
+
+        'outer: loop {
+            {
+                let ch = chars.peek();
+                if ch.is_none() {
+                    break 'outer;
+                }
+            }
+
+            match chars.next().unwrap() {
+                '+' => {
+                    let start = pos;
+                    'add: loop {
+                        let ch = match chars.peek() {
+                            Some(ch) => *ch,
+                            None => {
+                                result.push(Add((pos - start + 1) as u8));
+                                break 'outer
+                            }
+                        };
+
+                        if ch != '+' {
+                            result.push(Add((pos - start + 1) as u8));
+                            break 'add;
+                        }
+
+                        chars.next();
+                        pos += 1;
+                    }
+                },
+                '-' => {
+                    let start = pos;
+                    'sub: loop {
+                        let ch = match chars.peek() {
+                            Some(ch) => *ch,
+                            None => {
+                                result.push(Sub((pos - start + 1) as u8));
+                                break 'outer
+                            }
+                        };
+
+                        if ch != '-' {
+                            result.push(Sub((pos - start + 1) as u8));
+                            break 'sub;
+                        }
+
+                        chars.next();
+                        pos += 1;
+                    }
+                },
+                '>' => {
+                    let start = pos;
+                    'shr: loop {
+                        let ch = match chars.peek() {
+                            Some(ch) => *ch,
+                            None => {
+                                result.push(Shr(pos - start + 1));
+                                break 'outer
+                            }
+                        };
+
+                        if ch != '>' {
+                            result.push(Shr(pos - start + 1));
+                            break 'shr;
+                        }
+
+                        chars.next();
+                        pos += 1;
+                    }
+                },
+                '<' => {
+                    let start = pos;
+                    'shl: loop {
+                        let ch = match chars.peek() {
+                            Some(ch) => *ch,
+                            None => {
+                                result.push(Shl(pos - start + 1));
+                                break 'outer
+                            }
+                        };
+
+                        if ch != '<' {
+                            result.push(Shl(pos - start + 1));
+                            break 'shl;
+                        }
+
+                        chars.next();
+                        pos += 1;
+                    }
+                },
+                '[' => result.push(Jpf(0)),
+                ']' => result.push(Jpb(0)),
+                '.' => result.push(Wrt),
+                ',' => result.push(Red),
+                _ => (),
+            }
+        }
+
+        if result.len() > 3 {
+            let mut temp_v = Vec::new();
+            let mut iter3w = result.windows(3).peekable();
+            let mut pushed_num = 0;
+
+            while let Some(three) = iter3w.next() {
+                if three == &[Jpf(0), Sub(1), Jpb(0)] {
+                    temp_v.push(Stz);
+                    pushed_num = 2;
+                } else {
+                    if pushed_num > 0 {
+                        pushed_num -= 1;
+                    } else {
+                        temp_v.push(three[0]);
+                    }
+                }
+                if let Some(_) = iter3w.peek() {
+                    continue;
+                } else {
+                    if pushed_num == 1 {
+                        temp_v.push(three[2]);
+                    } else if pushed_num != 2 {
+                        temp_v.push(three[1]);
+                        temp_v.push(three[2]);
+                    }
+                }
+            }
+
+            result = temp_v;
+        }
+
+        for counter in 0..result.len() {
+            let inst = result[counter];
+            if let Jpf(_) = inst {
+                let mut staple = 1;
+                let mut seek = counter;
+                while staple != 0 && seek < result.len() {
+                    seek += 1;
+                    let inst2 = result[seek];
+                    match inst2 {
+                        Jpb(_) => { staple -= 1; },
+                        Jpf(_) => { staple += 1; },
+                         _  => (),
+                    }
+                }
+                if staple == 0 {
+                    result[counter] = Jpf(seek);
+                    result[seek] = Jpb(counter);
+                } else {
+                    // println!("{:?}", jumptable);
+                    return Err("Jumptable can't be constructed.");
+                }
+            }
+        }
+
+        Ok(result)
+    }
+}
+
 #[derive(Copy, Clone)]
 struct Pointer(usize);
 
 impl Pointer {
-    fn shift_right(&mut self) -> Result<(), &'static str> {
-        if self.0 < MAX_MEMORY - 1 {
-            self.0 += 1;
+    fn shift_right_n(&mut self, n: usize) -> Result<(), &'static str> {
+        if self.0 + n < MAX_MEMORY {
+            self.0 += n;
             Ok(())
         } else {
             Err("Too large pointer than the size of memory.")
         }
     }
 
-    fn shift_left(&mut self) -> Result<(), &'static str> {
-        if self.0 > 0 {
-            self.0 -= 1;
+    fn shift_left_n(&mut self, n: usize) -> Result<(), &'static str> {
+        if self.0 >= n {
+            self.0 -= n;
             Ok(())
         } else {
             Err("Too small pointer than the first address of memory.")
@@ -65,12 +255,12 @@ impl Counter {
         }
     }
 
-    fn dec(&mut self) -> Result<(), &'static str> {
-        if self.index > 0 {
-            self.index -= 1;
+    fn jump(&mut self, index: usize) -> Result<(), &'static str> {
+        if index < self.max_index {
+            self.index = index;
             Ok(())
         } else {
-            Err("Counter is smaller than zero.")
+            Err("Counter is larger than the program size.")
         }
     }
 
@@ -83,155 +273,96 @@ impl Counter {
     }
 }
 
-// use std::time::Instant;
-
 pub struct Brainfuck {
-    program:     ProgramString,
+    insts:       Vec<Inst>,
     result:      ResultString,
     memory:      Vec<u8>,
     pointer:     Pointer,
     counter:     Counter,
-    jumptable:   Vec<usize>,
     input_queue: InputString,
     input_mode:  bool,
 }
 
 impl Brainfuck {
     pub fn new(program: ProgramString) -> Result<Self, &'static str> {
-        let program_len = program.len();
-        let jumptable = Brainfuck::init_jumptable(&program)?;
+        let mut program = program;
+        Brainfuck::serialize(&mut program);
+        let mut codegen = CodeGen::new(&program);
+        let insts = codegen.generate_insts()?;
+        let insts_len = insts.len();
         Ok(Brainfuck {
-            program,
+            insts,
             result:      ResultString::new(),
             memory:      vec![0; MAX_MEMORY],
             pointer:     0.into(),
-            counter:     Counter::new(0, program_len),
-            jumptable,
+            counter:     Counter::new(0, insts_len),
             input_queue: InputString::new(),
             input_mode:  false,
         })
     }
 
+    fn serialize(program: &mut ProgramString) {
+        program.retain(|c| c == '+' || c == '-' || c == '>' || c == '<' ||
+                       c == '[' || c == ']' || c == '.' || c == ',');
+    }
+
     pub fn initialize(&mut self, program: ProgramString) -> Result<(), &'static str> {
-        let program_len = program.clone().len();
-        self.program = program.clone();
+        let mut program = program;
+        Brainfuck::serialize(&mut program);
+        let mut codegen = CodeGen::new(&program);
+        let insts = codegen.generate_insts()?;
+        let insts_len = insts.len();
+        self.insts = insts;
         self.result = ResultString::new();
         self.memory = vec![0; MAX_MEMORY];
         self.pointer = 0.into();
-        self.counter = Counter::new(0, program_len);
-        self.jumptable = Brainfuck::init_jumptable(&program)?;
+        self.counter = Counter::new(0, insts_len);
         self.input_queue = InputString::new();
         self.input_mode = false;
         Ok(())
     }
 
-    fn init_jumptable(program: &ProgramString) -> Result<Vec<usize>, &'static str> {
-        let mut jumptable = vec![0; program.len()];
-        let program = program.as_bytes();
-        for counter in 0..program.len() {
-            let bf_symbol: char = program[counter].into();
-            if bf_symbol == '[' {
-                let mut staple = 1;
-                let mut seek = counter;
-                while staple != 0 && seek < program.len() {
-                    seek += 1;
-                    let bf_symbol2: char = program[seek].into();
-                    match bf_symbol2 {
-                        ']' => { staple -= 1; },
-                        '[' => { staple += 1; },
-                         _  => (),
-                    }
-                }
-                if staple == 0 {
-                    jumptable[counter] = seek;
-                    jumptable[seek] = counter;
-                } else {
-                    // println!("{:?}", jumptable);
-                    return Err("Jumptable can't be constructed.");
-                }
-            }
-        }
-        // println!("{:?}", jumptable);
-        Ok(jumptable)
-    }
-
     pub fn step(&mut self) -> Result<(), &'static str> {
-        // let start = Instant::now();
-        let bf_symbol: char = self.program.as_bytes()[self.counter.index()].into();
-        match bf_symbol {
-            '+' => self.value_inc()?,
-            '-' => self.value_dec()?,
-            '>' => self.pointer_shift_right()?,
-            '<' => self.pointer_shift_left()?,
-            '.' => self.push_from_memory_into_result(),
-            '[' => self.at_start_staple()?,
-            ']' => self.jump_to_start_staple()?,
-            ',' => { self.input_mode = true; ()},
-             _  => (),
-        };
+        let inst = self.insts.as_slice()[self.counter.index()];
+
+        match inst {
+            Add(n) => self.value_plus(n),
+            Sub(n) => self.value_minus(n),
+            Shr(n) => self.pointer_shift_right(n)?,
+            Shl(n) => self.pointer_shift_left(n)?,
+            Wrt => self.push_from_memory_into_result(),
+            Jpf(idx) => self.jump_to_close_staple(idx)?,
+            Jpb(idx) => self.jump_to_start_staple(idx)?,
+            Red => { self.input_mode = true; ()},
+            Stz => self.store_zero(),
+        }
+
         self.counter.inc()?;
-        // let end = Instant::now();
-        // println!("{}: {:?}", bf_symbol, end.duration_since(start));
         Ok(())
     }
 
-    fn at_start_staple(&mut self) -> Result<(), &'static str> {
-        let bf_symbol1 :char = self.program.as_bytes()[self.counter.index()+1].into();
-        let bf_symbol2 :char = self.program.as_bytes()[self.counter.index()+2].into();
-        if (bf_symbol1, bf_symbol2) == ('-', ']') {
-            let pointer: usize = self.pointer.into();
-            self.memory[pointer] = 0;
-            self.counter.inc()?;
-            self.counter.inc()?;
-        } else {
-            self.jump_to_close_staple()?;
-        }
-        Ok(())
-    }
-
-    fn value_inc(&mut self) -> Result<(), &'static str> {
+    fn store_zero(&mut self) {
         let pointer: usize = self.pointer.into();
-        let mut bf_symbol: char = self.program.as_bytes()[self.counter.index()].into();
-        while bf_symbol == '+' {
-            self.memory[pointer] = self.memory[pointer].wrapping_add(1);
-            self.counter.inc()?;
-            bf_symbol = self.program.as_bytes()[self.counter.index()].into();
-        }
-        self.counter.dec()?;
-        Ok(())
+        self.memory[pointer] = 0;
     }
 
-    fn value_dec(&mut self) -> Result<(), &'static str> {
+    fn value_plus(&mut self, n: u8) {
         let pointer: usize = self.pointer.into();
-        let mut bf_symbol: char = self.program.as_bytes()[self.counter.index()].into();
-        while bf_symbol == '-' {
-            self.memory[pointer] = self.memory[pointer].wrapping_sub(1);
-            self.counter.inc()?;
-            bf_symbol = self.program.as_bytes()[self.counter.index()].into();
-        }
-        self.counter.dec()?;
+        self.memory[pointer] = self.memory[pointer].wrapping_add(n);
+    }
+
+    fn value_minus(&mut self, n: u8) {
+        let pointer: usize = self.pointer.into();
+        self.memory[pointer] = self.memory[pointer].wrapping_sub(n);
+    }
+
+    fn pointer_shift_right(&mut self, n: usize) -> Result<(), &'static str> {
+        self.pointer.shift_right_n(n)?;
         Ok(())
     }
 
-    fn pointer_shift_right(&mut self) -> Result<(), &'static str> {
-        let mut bf_symbol: char = self.program.as_bytes()[self.counter.index()].into();
-        while bf_symbol == '>' {
-            self.pointer.shift_right()?;
-            self.counter.inc()?;
-            bf_symbol = self.program.as_bytes()[self.counter.index()].into();
-        }
-        self.counter.dec()?;
-        Ok(())
-    }
-
-    fn pointer_shift_left(&mut self) -> Result<(), &'static str> {
-        let mut bf_symbol: char = self.program.as_bytes()[self.counter.index()].into();
-        while bf_symbol == '<' {
-            self.pointer.shift_left()?;
-            self.counter.inc()?;
-            bf_symbol = self.program.as_bytes()[self.counter.index()].into();
-        }
-        self.counter.dec()?;
+    fn pointer_shift_left(&mut self, n: usize) -> Result<(), &'static str> {
+        self.pointer.shift_left_n(n)?;
         Ok(())
     }
 
@@ -241,28 +372,20 @@ impl Brainfuck {
         self.result.push(out_char);
     }
 
-    fn jump_to_close_staple(&mut self) -> Result<(), &'static str> {
+    fn jump_to_close_staple(&mut self, index: usize) -> Result<(), &'static str> {
         let pointer: usize = self.pointer.into();
-        let value: i32 = self.memory[pointer].into();
+        let value = self.memory[pointer];
         if value == 0 {
-            let idx = self.counter.index();
-            self.counter = Counter {
-                index: self.jumptable[idx],
-                ..self.counter
-            }
+            self.counter.jump(index)?;
         }
         Ok(())
     }
 
-    fn jump_to_start_staple(&mut self) -> Result<(), &'static str> {
+    fn jump_to_start_staple(&mut self, index: usize) -> Result<(), &'static str> {
         let pointer: usize = self.pointer.into();
-        let value: i32 = self.memory[pointer].into();
+        let value = self.memory[pointer];
         if value != 0 {
-            let idx = self.counter.index();
-            self.counter = Counter {
-                index: self.jumptable[idx],
-                ..self.counter
-            }
+            self.counter.jump(index)?;
         }
         Ok(())
     }
@@ -304,7 +427,7 @@ impl Brainfuck {
     }
 
     pub fn include_comma(&self) -> bool {
-        self.program.contains(",")
+        self.insts.contains(&Red)
     }
 
     pub fn step_loop(&mut self) -> Result<(), &'static str> {
@@ -322,17 +445,14 @@ impl Brainfuck {
 mod tests {
     use super::*;
     #[test]
-    fn counter_overflow() {
+    fn pointer_overflow() {
         let program = ">".repeat(30_000);
         let mut bf = Brainfuck::new(program).unwrap();
-        for _ in 0..29_999 {
-            assert_eq!(bf.step(), Ok(()));
-        }
         assert_eq!(bf.step(), Err("Too large pointer than the size of memory."));
     }
 
     #[test]
-    fn counter_minus() {
+    fn pointer_minus() {
         let program = String::from("<");
         let mut bf = Brainfuck::new(program).unwrap();
         assert_eq!(bf.step(), Err("Too small pointer than the first address of memory."));
